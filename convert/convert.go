@@ -27,6 +27,8 @@ const (
 	FormatKongGateway2x Format = "kong-gateway-2.x"
 	// FormatKongGateway3x represents the Kong gateway 3.x format.
 	FormatKongGateway3x Format = "kong-gateway-3.x"
+	// FormatKongGateway3x represents the Kong gateway 3.x format.
+	FormatKongGateway3xExpressionLang Format = "kong-gateway-3.x-expression-lang"
 )
 
 // AllFormats contains all available formats.
@@ -43,6 +45,8 @@ func ParseFormat(key string) (Format, error) {
 		return FormatKongGateway2x, nil
 	case FormatKongGateway3x:
 		return FormatKongGateway3x, nil
+	case FormatKongGateway3xExpressionLang:
+		return FormatKongGateway3xExpressionLang, nil
 	case FormatDistributed:
 		return FormatDistributed, nil
 	default:
@@ -66,6 +70,14 @@ func Convert(
 	}
 
 	switch {
+	case from == FormatKongGateway3x && to == FormatKongGateway3xExpressionLang:
+		if len(inputFilenames) > 1 {
+			return fmt.Errorf("only one input file can be provided when converting from Kong to Konnect format")
+		}
+		outputContent, err = convertToExpressionLanguage(inputContent)
+		if err != nil {
+			return err
+		}
 	case from == FormatKongGateway && to == FormatKonnect:
 		if len(inputFilenames) > 1 {
 			return fmt.Errorf("only one input file can be provided when converting from Kong to Konnect format")
@@ -98,6 +110,95 @@ func Convert(
 
 	err = file.WriteContentToFile(outputContent, outputFilename, outputFormat)
 	return err
+}
+
+func convertToExpressionLanguage(input *file.Content) (*file.Content, error) {
+	if input == nil {
+		return nil, fmt.Errorf("input content is nil")
+	}
+	outputContent := input.DeepCopy()
+
+	for _, service := range outputContent.Services {
+		for _, route := range service.Routes {
+			expression, err := buildExpression(route.Route)
+
+			if err != nil {
+				continue
+			}
+
+			route.Expression = expression
+			route.Methods = nil
+			route.Paths = nil
+			route.Protocols = nil
+		}
+	}
+
+	return outputContent, nil
+}
+
+func buildExpression(route kong.Route) (*string, error) {
+	var expression string
+	protocols := make([]string, 0)
+	methods := make([]string, 0)
+	paths := make([]string, 0)
+	expressions := make([]string, 0)
+
+	if route.Protocols == nil && route.Methods == nil && route.Paths == nil {
+		return &expression, fmt.Errorf("not conversion needs to be performed")
+	}
+
+	expression = ""
+
+	if route.Protocols != nil {
+		for _, protocol := range route.Protocols {
+			protocolExpression := fmt.Sprintf("net.protocol == \"%s\"", *protocol)
+			protocols = append(protocols, protocolExpression)
+		}
+
+		protocolsCount := len(protocols)
+		if protocolsCount > 0 {
+			expressions = append(expressions, strings.Join(protocols, " || "))
+		}
+	}
+
+	if route.Methods != nil {
+		for _, method := range route.Methods {
+			methodExpression := fmt.Sprintf("http.method == \"%s\"", *method)
+			methods = append(methods, methodExpression)
+		}
+
+		methodsCount := len(methods)
+		if methodsCount > 0 {
+			expressions = append(expressions, strings.Join(methods, " || "))
+		}
+	}
+
+	if route.Paths != nil {
+		for _, path := range route.Paths {
+			pathExpression := fmt.Sprintf("http.path == \"%s\"", *path)
+
+			if strings.HasPrefix(*path, "~/") {
+				_, regex, _ := strings.Cut(*path, "~")
+				newPath := strings.Join(strings.Split(regex, "\\"), "\\\\")
+				pathExpression = fmt.Sprintf("http.path ~ \"%s\"", newPath)
+			}
+
+			paths = append(paths, pathExpression)
+		}
+
+		pathsCount := len(paths)
+		if pathsCount > 0 {
+			expressions = append(expressions, strings.Join(paths, " || "))
+		}
+	}
+
+	if len(expressions) == 1 {
+		expression = expressions[0]
+	} else {
+		expression = "(" + strings.Join(expressions, ") && (") + ")"
+	}
+
+	return &expression, nil
 }
 
 func convertKongGateway2xTo3x(input *file.Content, filename string) (*file.Content, error) {

@@ -313,6 +313,18 @@ func Test_Convert(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "convert from traditional-compact to expression language",
+			args: args{
+				inputFilenames:         []string{"testdata/10/input.yaml"},
+				outputFilename:         "testdata/10/output.yaml",
+				expectedOutputFilename: "testdata/10/output-expected.yaml",
+				fromFormat:             FormatKongGateway3x,
+				toFormat:               FormatKongGateway3xExpressionLang,
+				disableMocks:           true,
+			},
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
